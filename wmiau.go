@@ -27,6 +27,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"google.golang.org/protobuf/proto"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -440,6 +441,11 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 
 	store.DeviceProps.PlatformType = getPlatformTypeEnum(*platformType)
 	store.DeviceProps.Os = osName
+store.DeviceProps.Version = &waCompanionReg.AppVersion{
+Primary:   proto.Uint32(2),
+Secondary: proto.Uint32(3000),
+Tertiary:  proto.Uint32(1025585641),
+}
 
 	mycli := MyClient{
 		WAClient:       client,
