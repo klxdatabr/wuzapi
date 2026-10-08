@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -441,7 +440,7 @@ func (s *server) startClient(userID string, textjid string, token string, kill c
 
 	store.DeviceProps.PlatformType = getPlatformTypeEnum(*platformType)
 	store.DeviceProps.Os = osName
-store.DeviceProps.Version = &waCompanionReg.AppVersion{
+store.DeviceProps.Version = &waCompanionReg.DeviceProps_AppVersion{
 Primary:   proto.Uint32(2),
 Secondary: proto.Uint32(3000),
 Tertiary:  proto.Uint32(1025585641),
@@ -460,15 +459,14 @@ Tertiary:  proto.Uint32(1025585641),
 	// Store the MyClient in clientManager
 	clientManager.SetMyClient(userID, &mycli)
 
-	// Webhook HTTP client for outgoing webhook deliveries.
-	webhookClient := resty.New()
-	webhookClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
+	httpClient := resty.New()
+	httpClient.SetRedirectPolicy(resty.FlexibleRedirectPolicy(15))
 	if *waDebug == "DEBUG" {
-		webhookClient.SetDebug(true)
+		httpClient.SetDebug(true)
 	}
-	webhookClient.SetTimeout(30 * time.Second)
-	webhookClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
-	webhookClient.OnError(func(req *resty.Request, err error) {
+	httpClient.SetTimeout(30 * time.Second)
+	httpClient.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+	httpClient.OnError(func(req *resty.Request, err error) {
 		if v, ok := err.(*resty.ResponseError); ok {
 			// v.Response contains the last response from the server
 			// v.Err contains the original error
@@ -477,44 +475,34 @@ Tertiary:  proto.Uint32(1025585641),
 		}
 	})
 
+	// Set proxy if defined in DB (assumes users table contains proxy_url column)
 	var proxyURL string
-	webhookUseProxy := *globalWebhookUseProxy
-	err = s.db.QueryRow(
-		"SELECT proxy_url, COALESCE(webhook_use_proxy, true) FROM users WHERE id=$1",
-		userID,
-	).Scan(&proxyURL, &webhookUseProxy)
-	if err != nil && err != sql.ErrNoRows {
-		log.Error().Err(err).Str("user_id", userID).Msg("Failed to query proxy settings from database")
-	}
+	err = s.db.Get(&proxyURL, "SELECT proxy_url FROM users WHERE id=$1", userID)
 	if err == nil && proxyURL != "" {
 		parsed, perr := url.Parse(proxyURL)
 		if perr != nil {
 			log.Warn().Err(perr).Str("proxy", proxyURL).Msg("Invalid proxy URL, skipping proxy setup")
 		} else {
-			log.Info().Str("proxy", proxyURL).Bool("webhook_use_proxy", webhookUseProxy).Msg("Configuring proxy")
+
+			log.Info().Str("proxy", proxyURL).Msg("Configuring proxy")
 
 			if parsed.Scheme == "socks5" || parsed.Scheme == "socks5h" {
 				dialer, derr := proxy.FromURL(parsed, nil)
 				if derr != nil {
 					log.Warn().Err(derr).Str("proxy", proxyURL).Msg("Failed to build SOCKS proxy dialer, skipping proxy setup")
 				} else {
+					httpClient.SetProxy(proxyURL)
 					client.SetSOCKSProxy(dialer, whatsmeow.SetProxyOptions{})
-					log.Info().Msg("SOCKS proxy configured for WhatsApp connection")
+					log.Info().Msg("SOCKS proxy configured successfully")
 				}
 			} else {
+				httpClient.SetProxy(proxyURL)
 				client.SetProxyAddress(parsed.String(), whatsmeow.SetProxyOptions{})
-				log.Info().Msg("HTTP/HTTPS proxy configured for WhatsApp connection")
-			}
-
-			if webhookUseProxy {
-				webhookClient.SetProxy(proxyURL)
-				log.Info().Msg("Proxy configured for webhook delivery client")
-			} else {
-				log.Info().Msg("Webhook delivery client bypassing proxy")
+				log.Info().Msg("HTTP/HTTPS proxy configured successfully")
 			}
 		}
 	}
-	clientManager.SetHTTPClient(userID, webhookClient)
+	clientManager.SetHTTPClient(userID, httpClient)
 
 	// Initialize S3 client if configured (needed when user reconnects after container restart - connectOnStartup only runs for connected=1)
 	GetS3Manager().EnsureClientFromDB(userID)
@@ -1164,13 +1152,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 	case *events.Presence:
 		postmap["type"] = "Presence"
 		dowebhook = 1
-		postmap["from"] = evt.From.String()
 		if evt.Unavailable {
 			postmap["state"] = "offline"
 			if evt.LastSeen.IsZero() {
 				log.Info().Str("from", evt.From.String()).Msg("User is now offline")
 			} else {
-				postmap["last_seen"] = evt.LastSeen.Unix()
 				log.Info().Str("from", evt.From.String()).Str("lastSeen", fmt.Sprintf("%v", evt.LastSeen)).Msg("User is now offline")
 			}
 		} else {
