@@ -1,11 +1,8 @@
-FROM golang:1.26-bookworm AS builder
+FROM golang:latest AS builder
 
 ENV GOTOOLCHAIN=auto
 
-RUN apt-get update && apt-get install -y --no-install-recommends     ca-certificates     && apt-get clean     && rm -rf /var/lib/apt/lists/*
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends     gcc     g++     pkg-config     && apt-get clean     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends     ca-certificates     gcc     g++     pkg-config     && apt-get clean     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -17,9 +14,6 @@ RUN go build -o wuzapi
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends     ca-certificates     && apt-get clean     && rm -rf /var/lib/apt/lists/*
-
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends     ca-certificates     netcat-openbsd     postgresql-client     openssl     curl     ffmpeg     tzdata     && rm -rf /var/lib/apt/lists/*
 
 ENV TZ="America/Sao_Paulo"
